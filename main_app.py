@@ -1,4 +1,4 @@
-# main_app.py (Diperbarui untuk Raspberry Pi 5 dengan gpiod)
+# main_app.py (Diperbarui untuk Raspberry Pi 5 dengan gpiozero)
 # -----------------------------
 # Import semua library yang dibutuhkan
 # -----------------------------
@@ -6,7 +6,7 @@ import paho.mqtt.client as mqtt
 import json
 import time
 import cv2
-import gpiod  # <-- Ganti RPi.GPIO dengan gpiod
+from gpiozero import LED  # <-- Ganti gpiod dengan LED dari gpiozero
 from ultralytics import YOLO
 
 # ====================================================================
@@ -33,56 +33,42 @@ CAMERA_INDEX = 0
 # Nomor pin tetap sama (mode BCM)
 LAMP_PIN = 23
 FAN_PIN = 24
-# Nama GPIO chip untuk Raspberry Pi 5 biasanya 'gpiochip4'
-GPIO_CHIP = 'gpiochip4'
+# Variabel GPIO_CHIP tidak diperlukan lagi untuk gpiozero
 
 # ====================================================================
 # KODE UTAMA (UMUMNYA TIDAK PERLU DIUBAH)
 # ====================================================================
 
-# Variabel global untuk menampung objek line GPIO
-lamp_line = None
-fan_line = None
-chip = None
+# Variabel global untuk objek LED (yang merepresentasikan relay)
+lamp = None
+fan = None
 
-# --- Logika Kontrol Hardware dengan gpiod ---
+# --- Logika Kontrol Hardware dengan gpiozero ---
 def setup_gpio():
-    """Mengatur pin GPIO menggunakan gpiod."""
-    global lamp_line, fan_line, chip
-    try:
-        chip = gpiod.Chip(GPIO_CHIP)
-        # Minta akses ke line/pin yang akan digunakan sebagai OUTPUT
-        lamp_line = chip.get_line(LAMP_PIN)
-        fan_line = chip.get_line(FAN_PIN)
-        
-        lamp_line.request(consumer="lamp", type=gpiod.Line.DIRECTION_OUTPUT)
-        fan_line.request(consumer="fan", type=gpiod.Line.DIRECTION_OUTPUT)
-
-        # Matikan relay saat program dimulai
-        lamp_line.set_value(0)
-        fan_line.set_value(0)
-        
-        print("✅ GPIO dan Relay siap (menggunakan gpiod)...")
-    except Exception as e:
-        print(f"❌ Gagal setup GPIO: {e}")
-        print("Pastikan nama GPIO_CHIP sudah benar dan Anda memiliki izin.")
-        exit()
+    """Menginisialisasi objek untuk setiap relay."""
+    global lamp, fan
+    # Membuat objek LED untuk setiap pin. Sangat sederhana!
+    lamp = LED(LAMP_PIN)
+    fan = LED(FAN_PIN)
+    print("✅ GPIO dan Relay siap (menggunakan gpiozero)...")
 
 def control_device(device, action):
-    """Mengontrol relay berdasarkan perintah dari MQTT."""
-    line = None
+    """Mengontrol relay menggunakan metode .on() dan .off()."""
+    target_device = None
     if device == "lamp":
-        line = lamp_line
+        target_device = lamp
     elif device == "fan":
-        line = fan_line
+        target_device = fan
     else:
         print(f"Peringatan: Tipe perangkat '{device}' tidak dikenali.")
         return
 
-    # 1 untuk ON (HIGH), 0 untuk OFF (LOW)
-    value = 1 if action == "turn_on" else 0
-    line.set_value(value)
-    print(f"🚀 AKSI: Menjalankan '{action}' pada '{device}' (Pin {line.offset()})")
+    if action == "turn_on":
+        target_device.on()
+    elif action == "turn_off":
+        target_device.off()
+        
+    print(f"🚀 AKSI: Menjalankan '{action}' pada '{device}' (Pin {target_device.pin})")
 
 # --- Logika Deteksi Orang dengan YOLO (Tetap Sama) ---
 def setup_camera_and_model():
@@ -109,7 +95,7 @@ def detect_person(camera, model):
                 return True
     return False
 
-# --- Fungsi-fungsi MQTT (dengan perbaikan warning) ---
+# --- Fungsi-fungsi MQTT (Tetap Sama) ---
 def on_connect(client, userdata, flags, rc, properties=None):
     # ... (fungsi ini tidak berubah) ...
     if rc == 0:
@@ -133,7 +119,6 @@ def on_message(client, userdata, msg):
 
 # --- Program Utama ---
 if __name__ == "__main__":
-    # Perbaikan untuk DeprecationWarning dari paho-mqtt
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
     client.on_connect = on_connect
@@ -170,13 +155,11 @@ if __name__ == "__main__":
     finally:
         print("🧹 Membersihkan sumber daya...")
         camera.release()
-        # Melepaskan line GPIO saat program selesai
-        if lamp_line:
-            lamp_line.release()
-        if fan_line:
-            fan_line.release()
-        if chip:
-            chip.close()
+        # gpiozero akan otomatis membersihkan pin saat script berhenti
+        if lamp:
+            lamp.close()
+        if fan:
+            fan.close()
         client.loop_stop()
         client.disconnect()
         print("Selesai.")
