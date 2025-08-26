@@ -26,11 +26,9 @@ FRAME_HEIGHT = 480
 
 # --- Konfigurasi Pin GPIO ---
 LAMP_PIN = 26 
-
-
 # Variabel global
 lamp = None
-lamp_is_on = False # Variabel untuk melacak status lampu sebenarnya
+lamp_is_on = False
 
 # --- Logika Kontrol Hardware (dipanggil oleh MQTT) ---
 def setup_gpio():
@@ -98,7 +96,7 @@ if __name__ == "__main__":
 
         # Variabel untuk logika deteksi canggih Anda
         consecutive_detections = 0
-        is_person_reported = False # Melacak status terakhir yang dilaporkan ke backend
+        is_person_reported = False 
         fps_buffer = []
         fps_avg_len = 50
 
@@ -113,11 +111,7 @@ if __name__ == "__main__":
 
             # Menjalankan deteksi
             results = model.predict(frame, verbose=False)
-            
-            # Mendapatkan frame dengan anotasi (bounding box, keypoints)
             annotated_frame = results[0].plot()
-
-            # Logika deteksi pose
             pose_found = len(results) > 0 and len(results[0].keypoints) > 0
 
             # Logika smoothing
@@ -126,17 +120,16 @@ if __name__ == "__main__":
             else:
                 consecutive_detections = max(consecutive_detections - 1, 0)
             
-            should_be_active = consecutive_detections >= 8
-            should_be_inactive = consecutive_detections == 0
-
-            # Daripada menyalakan lampu langsung, kita PUBLISH status ke backend
-            if should_be_active and not is_person_reported:
+        
+            # Jika deteksi cukup kuat DAN status belum dilaporkan sebagai 'aktif'
+            if consecutive_detections >= 8 and not is_person_reported:
                 is_person_reported = True
                 payload = json.dumps({"motion_detected": True})
                 client.publish(SENSOR_TOPIC, payload)
                 print(f"📡 PUBLISH ke {SENSOR_TOPIC}: Pose Terdeteksi!")
             
-            elif should_be_inactive and is_person_reported:
+            # Jika deteksi sudah benar-benar hilang DAN status masih dilaporkan sebagai 'aktif'
+            elif consecutive_detections == 0 and is_person_reported:
                 is_person_reported = False
                 payload = json.dumps({"motion_cleared": True})
                 client.publish(SENSOR_TOPIC, payload)
@@ -144,13 +137,14 @@ if __name__ == "__main__":
 
             # Menampilkan FPS dan Status Lampu di layar
             t_stop = time.perf_counter()
-            frame_rate_calc = 1 / (t_stop - t_start)
-            fps_buffer.append(frame_rate_calc)
-            if len(fps_buffer) > fps_avg_len:
-                fps_buffer.pop(0)
-            avg_frame_rate = np.mean(fps_buffer)
-            
-            cv2.putText(annotated_frame, f'FPS: {avg_frame_rate:.2f}', (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
+            # Hindari error pembagian dengan nol jika t_start == t_stop
+            if (t_stop - t_start) > 0:
+                frame_rate_calc = 1 / (t_stop - t_start)
+                fps_buffer.append(frame_rate_calc)
+                if len(fps_buffer) > fps_avg_len:
+                    fps_buffer.pop(0)
+                avg_frame_rate = np.mean(fps_buffer)
+                cv2.putText(annotated_frame, f'FPS: {avg_frame_rate:.2f}', (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
 
             # Status lampu dibaca dari variabel global yang diubah oleh MQTT
             if lamp_is_on:
