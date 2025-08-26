@@ -1,12 +1,12 @@
-# main_app.py (Diperbarui untuk Raspberry Pi 5 dengan gpiozero)
+# main_app.py (Versi Fokus Lampu)
+# Menggunakan: YOLOv8, gpiozero, dan paho-mqtt
 # -----------------------------
 # Import semua library yang dibutuhkan
 # -----------------------------
 import paho.mqtt.client as mqtt
 import json
-import time
 import cv2
-from gpiozero import LED  # <-- Ganti gpiod dengan LED dari gpiozero
+from gpiozero import LED
 from ultralytics import YOLO
 
 # ====================================================================
@@ -14,13 +14,13 @@ from ultralytics import YOLO
 # ====================================================================
 
 # --- Konfigurasi MQTT ---
-MQTT_BROKER = "192.168.1.5"
+MQTT_BROKER = "192.168.0.174" 
 MQTT_PORT = 1883
-MQTT_USERNAME = "your_mqtt_username"
-MQTT_PASSWORD = "your_mqtt_password"
+MQTT_USERNAME = "cpsmagang"
+MQTT_PASSWORD = "cpsjaya123"
 
 # --- Konfigurasi Perangkat ---
-DEVICE_IP_ADDRESS = "192.168.1.101" 
+DEVICE_IP_ADDRESS = "192.168.0.174" 
 SENSOR_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/sensor"
 ACTION_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/action" 
 
@@ -30,74 +30,67 @@ CONF_THRESHOLD = 0.45
 CAMERA_INDEX = 0
 
 # --- Konfigurasi Pin GPIO ---
-# Nomor pin tetap sama (mode BCM)
-LAMP_PIN = 23
-FAN_PIN = 24
-# Variabel GPIO_CHIP tidak diperlukan lagi untuk gpiozero
+LAMP_PIN = 26
 
 # ====================================================================
 # KODE UTAMA (UMUMNYA TIDAK PERLU DIUBAH)
 # ====================================================================
 
-# Variabel global untuk objek LED (yang merepresentasikan relay)
+# Variabel global untuk objek lampu
 lamp = None
-fan = None
 
 # --- Logika Kontrol Hardware dengan gpiozero ---
 def setup_gpio():
-    """Menginisialisasi objek untuk setiap relay."""
-    global lamp, fan
-    # Membuat objek LED untuk setiap pin. Sangat sederhana!
+    """Menginisialisasi objek untuk relay lampu."""
+    global lamp
     lamp = LED(LAMP_PIN)
-    fan = LED(FAN_PIN)
-    print("✅ GPIO dan Relay siap (menggunakan gpiozero)...")
+    print("✅ GPIO untuk Lampu siap (menggunakan gpiozero)...")
 
 def control_device(device, action):
-    """Mengontrol relay menggunakan metode .on() dan .off()."""
-    target_device = None
+    """Mengontrol relay lampu menggunakan metode .on() dan .off()."""
     if device == "lamp":
-        target_device = lamp
-    elif device == "fan":
-        target_device = fan
+        if action == "turn_on":
+            lamp.on()
+        elif action == "turn_off":
+            lamp.off()
+        
+        print(f"🚀 AKSI: Menjalankan '{action}' pada '{device}' (Pin {lamp.pin})")
     else:
         print(f"Peringatan: Tipe perangkat '{device}' tidak dikenali.")
-        return
 
-    if action == "turn_on":
-        target_device.on()
-    elif action == "turn_off":
-        target_device.off()
-        
-    print(f"🚀 AKSI: Menjalankan '{action}' pada '{device}' (Pin {target_device.pin})")
-
-# --- Logika Deteksi Orang dengan YOLO (Tetap Sama) ---
+# --- Logika Deteksi Orang dengan YOLO (Tidak Berubah) ---
 def setup_camera_and_model():
-    # ... (fungsi ini tidak berubah) ...
+    """Mempersiapkan kamera dan memuat model YOLO."""
     print("⏳ Mempersiapkan kamera dan memuat model YOLOv8...")
     camera = cv2.VideoCapture(CAMERA_INDEX)
     camera.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+    
     if not camera.isOpened():
         raise IOError("❌ Tidak bisa membuka kamera.")
+        
     model = YOLO(MODEL_PATH)
     print("✅ Kamera dan model siap.")
     return camera, model
 
 def detect_person(camera, model):
-    # ... (fungsi ini tidak berubah) ...
+    """Mengambil frame dan mendeteksi objek 'person'."""
     ret, frame = camera.read()
     if not ret:
+        print("Peringatan: Gagal mengambil frame dari kamera.")
         return False
+
     results = model.predict(frame, verbose=False)
+    
     for result in results:
         for box in result.boxes:
             if int(box.cls) == 0 and box.conf > CONF_THRESHOLD:
                 return True
     return False
 
-# --- Fungsi-fungsi MQTT (Tetap Sama) ---
+# --- Fungsi-fungsi MQTT (Tidak Berubah) ---
 def on_connect(client, userdata, flags, rc, properties=None):
-    # ... (fungsi ini tidak berubah) ...
+    """Callback saat berhasil terhubung ke broker."""
     if rc == 0:
         print(f"✅ Terhubung ke MQTT Broker di {MQTT_BROKER}!")
         client.subscribe(ACTION_TOPIC)
@@ -106,14 +99,16 @@ def on_connect(client, userdata, flags, rc, properties=None):
         print(f"❌ Gagal terhubung ke MQTT, kode error: {rc}")
 
 def on_message(client, userdata, msg):
-    # ... (fungsi ini tidak berubah) ...
+    """Callback saat menerima pesan dari topik yang di-subscribe."""
     print(f"📩 PESAN DITERIMA di topik {msg.topic}")
     try:
         payload = json.loads(msg.payload.decode())
         device = payload.get("device")
         action = payload.get("action")
+        
         if device and action:
             control_device(device, action)
+            
     except Exception as e:
         print(f"Error memproses pesan: {e}")
 
@@ -155,11 +150,8 @@ if __name__ == "__main__":
     finally:
         print("🧹 Membersihkan sumber daya...")
         camera.release()
-        # gpiozero akan otomatis membersihkan pin saat script berhenti
         if lamp:
             lamp.close()
-        if fan:
-            fan.close()
         client.loop_stop()
         client.disconnect()
         print("Selesai.")
