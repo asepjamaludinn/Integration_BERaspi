@@ -1,3 +1,5 @@
+# main_app.py (Final - Menggunakan Inisialisasi Spesifik Pengguna)
+
 import cv2
 import time
 import json
@@ -6,6 +8,9 @@ import paho.mqtt.client as mqtt
 from gpiozero import LED
 from ultralytics import YOLO
 
+# ====================================================================
+# KONFIGURASI DARI ANDA
+# ====================================================================
 
 # --- Konfigurasi MQTT ---
 MQTT_BROKER = "192.168.0.174"
@@ -18,14 +23,15 @@ DEVICE_IP_ADDRESS = "192.168.0.174"
 SENSOR_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/sensor"
 ACTION_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/action"
 
-# --- Konfigurasi Model & Kamera ---
-MODEL_PATH = 'yolov8n-pose.pt'
-CAMERA_INDEX = 0
-FRAME_WIDTH = 640
-FRAME_HEIGHT = 480
+# --- Konfigurasi Model & Kamera (Menggunakan preferensi Anda) ---
+MODEL_NAME = "yolo11n-pose_ncnn_mode" 
+CAM_SOURCE = "usb0"
+RES_W, RES_H = 640, 480
 
-# --- Konfigurasi Pin GPIO ---
+# --- Konfigurasi Pin GPIO (Menggunakan preferensi Anda) ---
 LAMP_PIN = 26 
+
+
 # Variabel global
 lamp = None
 lamp_is_on = False
@@ -33,7 +39,7 @@ lamp_is_on = False
 # --- Logika Kontrol Hardware (dipanggil oleh MQTT) ---
 def setup_gpio():
     global lamp
-    lamp = LED(LAMP_PIN)
+    lamp = LED(LAMP_PIN) # <-- Menggunakan pin GPIO Anda
     print("✅ GPIO untuk Lampu siap...")
 
 def control_device(device, action):
@@ -49,7 +55,7 @@ def control_device(device, action):
     else:
         print(f"Peringatan: Perangkat '{device}' tidak dikenali.")
 
-# --- Fungsi-fungsi MQTT ---
+# --- Fungsi-fungsi MQTT (Tidak perlu diubah) ---
 def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         print(f"✅ Terhubung ke MQTT Broker di {MQTT_BROKER}!")
@@ -80,14 +86,22 @@ if __name__ == "__main__":
     # Inisialisasi Hardware
     setup_gpio()
 
-    # Inisialisasi Kamera & Model
-    print("⏳ Mempersiapkan kamera dan memuat model YOLOv8-Pose...")
-    camera = cv2.VideoCapture(CAMERA_INDEX)
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
-    if not camera.isOpened():
-        raise IOError("❌ Tidak bisa membuka kamera.")
-    model = YOLO(MODEL_PATH)
+    # Inisialisasi Kamera & Model (Menggunakan logika Anda)
+    print("⏳ Mempersiapkan kamera dan memuat model YOLO...")
+    if "usb" in CAM_SOURCE:
+        cam_idx = int(CAM_SOURCE[3:])
+        camera = cv2.VideoCapture(cam_idx)
+        camera.set(3, RES_W)
+        camera.set(4, RES_H)
+        if not camera.isOpened():
+            print("❌ Gagal membuka kamera.")
+            exit()
+    else:
+        print("❌ Sumber kamera tidak valid!")
+        exit()
+    
+    # <-- Menggunakan nama model spesifik Anda dengan task 'pose'
+    model = YOLO(MODEL_NAME) 
     print("✅ Kamera dan model siap.")
 
     try:
@@ -96,7 +110,7 @@ if __name__ == "__main__":
 
         # Variabel untuk logika deteksi canggih Anda
         consecutive_detections = 0
-        is_person_reported = False 
+        is_person_reported = False
         fps_buffer = []
         fps_avg_len = 50
 
@@ -109,7 +123,7 @@ if __name__ == "__main__":
                 print("Peringatan: Gagal mengambil frame.")
                 break
 
-            # Menjalankan deteksi
+            # Menjalankan deteksi (verbose=False agar tidak ada log dari YOLO)
             results = model.predict(frame, verbose=False)
             annotated_frame = results[0].plot()
             pose_found = len(results) > 0 and len(results[0].keypoints) > 0
@@ -120,16 +134,18 @@ if __name__ == "__main__":
             else:
                 consecutive_detections = max(consecutive_detections - 1, 0)
             
-        
-            # Jika deteksi cukup kuat DAN status belum dilaporkan sebagai 'aktif'
-            if consecutive_detections >= 8 and not is_person_reported:
+            # Menentukan status berdasarkan smoothing
+            should_be_active = consecutive_detections >= 8
+            should_be_inactive = consecutive_detections == 0
+
+            # Melaporkan perubahan status ke backend via MQTT
+            if should_be_active and not is_person_reported:
                 is_person_reported = True
                 payload = json.dumps({"motion_detected": True})
                 client.publish(SENSOR_TOPIC, payload)
                 print(f"📡 PUBLISH ke {SENSOR_TOPIC}: Pose Terdeteksi!")
             
-            # Jika deteksi sudah benar-benar hilang DAN status masih dilaporkan sebagai 'aktif'
-            elif consecutive_detections == 0 and is_person_reported:
+            elif should_be_inactive and is_person_reported:
                 is_person_reported = False
                 payload = json.dumps({"motion_cleared": True})
                 client.publish(SENSOR_TOPIC, payload)
@@ -137,7 +153,6 @@ if __name__ == "__main__":
 
             # Menampilkan FPS dan Status Lampu di layar
             t_stop = time.perf_counter()
-            # Hindari error pembagian dengan nol jika t_start == t_stop
             if (t_stop - t_start) > 0:
                 frame_rate_calc = 1 / (t_stop - t_start)
                 fps_buffer.append(frame_rate_calc)
@@ -146,7 +161,6 @@ if __name__ == "__main__":
                 avg_frame_rate = np.mean(fps_buffer)
                 cv2.putText(annotated_frame, f'FPS: {avg_frame_rate:.2f}', (20,40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
 
-            # Status lampu dibaca dari variabel global yang diubah oleh MQTT
             if lamp_is_on:
                 cv2.putText(annotated_frame, "Light ON", (20,80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
             else:
