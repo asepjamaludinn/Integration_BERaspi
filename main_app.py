@@ -54,23 +54,23 @@ def control_device(device, action):
         elif action == "turn_off":
             leds.off()
             gpio_state = 0
-        print(f"🚀 AKSI DARI BACKEND: Menjalankan '{action}' pada '{device}'")
+        print(f"AKSI DARI BACKEND: Menjalankan '{action}' pada '{device}'")
 
 # --- FUNGSI CALLBACK MQTT ---
 def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
-        print(f"✅ Terhubung ke MQTT Broker di {MQTT_BROKER}!")
+        print(f"Terhubung ke MQTT Broker di {MQTT_BROKER}!")
         client.subscribe(ACTION_TOPIC)
-        print(f"👂 SUBSCRIBE ke topik aksi: {ACTION_TOPIC}")
+        print(f"SUBSCRIBE ke topik aksi: {ACTION_TOPIC}")
         
         status_payload = json.dumps({"status": "online"})
         client.publish(STATUS_TOPIC, status_payload)
-        print(f"📡 PUBLISH: Mengirim status ONLINE ke {STATUS_TOPIC}")
+        print(f"PUBLISH: Mengirim status ONLINE ke {STATUS_TOPIC}")
     else:
-        print(f"❌ Gagal terhubung ke MQTT, kode error: {rc}")
+        print(f"Gagal terhubung ke MQTT, kode error: {rc}")
 
 def on_message(client, userdata, msg):
-    print(f"📩 PESAN DITERIMA di topik {msg.topic}")
+    print(f"PESAN DITERIMA di topik {msg.topic}")
     try:
         payload = json.loads(msg.payload.decode())
         device = payload.get("device")
@@ -93,7 +93,7 @@ client.will_set(STATUS_TOPIC, payload=last_will_payload, qos=1, retain=False)
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
 client.loop_start()
 
-print("\n🚀 Sistem deteksi mulai berjalan. Tekan 'Q' untuk berhenti.")
+print("\nSistem deteksi mulai berjalan. Tekan 'Q' untuk berhenti.")
 try:
     while True:
         t_start = time.perf_counter()
@@ -125,13 +125,13 @@ try:
             is_person_reported = True
             payload = json.dumps({"motion_detected": True})
             client.publish(SENSOR_TOPIC, payload)
-            print(f"📡 PUBLISH: Pose Terdeteksi!")
+            print(f"PUBLISH: Pose Terdeteksi!")
 
         elif should_be_inactive and is_person_reported:
             is_person_reported = False
             payload = json.dumps({"motion_cleared": True})
             client.publish(SENSOR_TOPIC, payload)
-            print(f"📡 PUBLISH: Pose Tidak Terdeteksi!")
+            print(f"PUBLISH: Pose Tidak Terdeteksi!")
 
         if gpio_state == 0:
             cv2.putText(annotated_frame, "Device OFF", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 0, 255), 2)
@@ -154,7 +154,7 @@ finally:
     print("\nMembersihkan sumber daya...")
     status_payload = json.dumps({"status": "offline"})
     client.publish(STATUS_TOPIC, status_payload)
-    print(f"📡 PUBLISH: Mengirim status OFFLINE ke {STATUS_TOPIC}")
+    print(f"PUBLISH: Mengirim status OFFLINE ke {STATUS_TOPIC}")
     time.sleep(0.5) 
 
     cam.release()
