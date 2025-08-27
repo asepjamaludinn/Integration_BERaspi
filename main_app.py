@@ -53,6 +53,7 @@ fps_avg_len = 50
 def control_device(device, action):
     """Fungsi yang dipanggil SAAT ADA PERINTAH dari backend."""
     global gpio_state
+    global auto_mode_enabled 
     if device == "lamp":
         if action == "turn_on":
             leds.on()
@@ -60,7 +61,8 @@ def control_device(device, action):
         elif action == "turn_off":
             leds.off()
             gpio_state = 0
-        print(f"AKSI DARI BACKEND: Menjalankan '{action}' pada '{device}'")
+    auto_mode_enabled = False
+    print(f"AKSI DARI BACKEND: Menjalankan '{action}' pada '{device}'. Mode Otomatis kini DINONAKTIFKAN (Override).")
 
 # --- FUNGSI CALLBACK MQTT ---
 def on_connect(client, userdata, flags, rc, properties=None):
