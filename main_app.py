@@ -3,7 +3,7 @@ import time
 import json
 import numpy as np
 import paho.mqtt.client as mqtt
-from gpiozero import LED  
+from gpiozero import LED 
 from ultralytics import YOLO
 
 # --- KONFIGURASI ---
@@ -22,8 +22,8 @@ SETTINGS_UPDATE_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/settings/update"
 
 try:
     model_pose = YOLO("yolo12n-pose_ncnn_model", task="pose")
-    lamp = LED(19) 
-    fan = LED(26)  
+    lamp = LED(26) 
+    fan = LED(19)  
 
     cam_source = "usb0"
     resW, resH = 640, 480
@@ -79,7 +79,7 @@ def control_device(device, action):
     auto_mode_enabled = False
     print(f"AKSI MANUAL: Menjalankan '{action}' pada '{device}'. Mode Otomatis kini DINONAKTIFKAN.")
 
-# --- FUNGSI CALLBACK MQTT (Tidak ada perubahan di sini) ---
+
 def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         print(f"Terhubung ke MQTT Broker di {MQTT_BROKER}!")
@@ -152,6 +152,7 @@ try:
                 lamp_state = 0
                 lamp.off()
             
+            # Mengirim laporan status deteksi ke backend
             if should_be_active and not is_person_reported:
                 is_person_reported = True
                 payload = json.dumps({"motion_detected": True})
@@ -165,8 +166,6 @@ try:
         else:
             annotated_frame = frame
 
-        # --- [DIUBAH] Tampilkan status terpisah untuk setiap perangkat ---
-        # Tampilkan status Lampu
         lamp_status_text = f"Lamp: {'ON' if lamp_state == 1 else 'OFF'}"
         lamp_color = (0, 255, 0) if lamp_state == 1 else (0, 0, 255)
         cv2.putText(annotated_frame, lamp_status_text, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, .7, lamp_color, 2)
@@ -203,7 +202,7 @@ finally:
 
     cam.release()
     cv2.destroyAllWindows()
-    # --- [DIUBAH] Tutup koneksi GPIO terpisah ---
+  
     lamp.close()
     fan.close()
     client.loop_stop()
