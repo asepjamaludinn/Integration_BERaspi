@@ -3,7 +3,7 @@ import time
 import json
 import numpy as np
 import paho.mqtt.client as mqtt
-from gpiozero import LED 
+from gpiozero import LED
 from ultralytics import YOLO
 
 # --- KONFIGURASI ---
@@ -19,82 +19,62 @@ SENSOR_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/sensor"
 ACTION_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/action"
 SETTINGS_UPDATE_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/settings/update"
 
-
 try:
     model_pose = YOLO("yolo12n-pose_ncnn_model", task="pose")
-    lamp = LED(26) 
-    fan = LED(19)  
-
+    lamp = LED(26)
+    fan = LED(19)
     cam_source = "usb0"
     resW, resH = 640, 480
-    
-    if "usb" in cam_source:
-        cam_idx = int(cam_source[3:])
-        cam = cv2.VideoCapture(cam_idx)
-        cam.set(3, resW)
-        cam.set(4, resH)
-        if not cam.isOpened():
-            print("Gagal membuka kamera.")
-            exit()
-    else:
-        print("Tidak ada kamera terdeteksi.")
-        exit()
+    cam = cv2.VideoCapture(int(cam_source[3:]))
+    cam.set(3, resW)
+    cam.set(4, resH)
+    if not cam.isOpened(): raise Exception("Gagal membuka kamera.")
     print("Kamera siap.")
 except Exception as e:
     print(f"Error saat inisialisasi: {e}")
     exit()
 
-auto_mode_enabled = True
-lamp_state = 0  # 0 = OFF, 1 = ON
-fan_state = 0   # 0 = OFF, 1 = ON
+# [DIUBAH] Menggunakan dictionary untuk menyimpan mode setiap perangkat
+device_auto_modes = {
+    "lamp": True,
+    "fan": True
+}
+lamp_state = 0
+fan_state = 0
 consecutive_detections = 0
 is_person_reported = False
 fps_buffer = []
 fps_avg_len = 50
 
-
+# [DIUBAH] Fungsi kontrol perangkat yang lebih granular
 def control_device(device, action):
-    """Fungsi ini sekarang menangani 'lamp' dan 'fan' secara terpisah."""
-    global lamp_state, fan_state, auto_mode_enabled
+    global lamp_state, fan_state, device_auto_modes
     
-    # Logika untuk Lampu
     if device == "lamp":
-        if action == "turn_on":
-            lamp.on()
-            lamp_state = 1
-        elif action == "turn_off":
-            lamp.off()
-            lamp_state = 0
+        if action == "turn_on": lamp.on(); lamp_state = 1
+        else: lamp.off(); lamp_state = 0
             
-    # Logika untuk Kipas
     elif device == "fan":
-        if action == "turn_on":
-            fan.on()
-            fan_state = 1
-        elif action == "turn_off":
-            fan.off()
-            fan_state = 0
+        if action == "turn_on": fan.on(); fan_state = 1
+        else: fan.off(); fan_state = 0
     
-    # Aksi manual apapun akan mematikan mode otomatis
-    auto_mode_enabled = False
-    print(f"AKSI MANUAL: Menjalankan '{action}' pada '{device}'. Mode Otomatis kini DINONAKTIFKAN.")
-
+    if device in device_auto_modes:
+        device_auto_modes[device] = False
+        print(f"AKSI MANUAL: Mode Otomatis untuk '{device}' kini DINONAKTIFKAN.")
 
 def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         print(f"Terhubung ke MQTT Broker di {MQTT_BROKER}!")
         client.subscribe(ACTION_TOPIC)
-        print(f"SUBSCRIBE ke topik aksi: {ACTION_TOPIC}")
         client.subscribe(SETTINGS_UPDATE_TOPIC)
-        print(f"SUBSCRIBE ke topik settings: {SETTINGS_UPDATE_TOPIC}")
         status_payload = json.dumps({"status": "online"})
         client.publish(STATUS_TOPIC, status_payload)
-        print(f"PUBLISH: Mengirim status ONLINE ke {STATUS_TOPIC}")
     else:
         print(f"Gagal terhubung ke MQTT, kode error: {rc}")
 
+# [DIUBAH] on_message sekarang menangani payload yang lebih spesifik
 def on_message(client, userdata, msg):
-    global auto_mode_enabled
+    global device_auto_modes
     print(f"PESAN DITERIMA di topik {msg.topic}")
     try:
         payload = json.loads(msg.payload.decode())
@@ -104,14 +84,15 @@ def on_message(client, userdata, msg):
             if device and action:
                 control_device(device, action)
         elif msg.topic == SETTINGS_UPDATE_TOPIC:
-            if "auto_mode_enabled" in payload:
-                auto_mode_enabled = payload["auto_mode_enabled"]
-                mode_status = "DIAKTIFKAN" if auto_mode_enabled else "DINONAKTIFKAN"
-                print(f"SETTINGS UPDATE: Mode Otomatis kini {mode_status}")
+            device = payload.get("device")
+            if device in device_auto_modes and "auto_mode_enabled" in payload:
+                new_mode = payload["auto_mode_enabled"]
+                device_auto_modes[device] = new_mode
+                mode_status = "DIAKTIFKAN" if new_mode else "DINONAKTIFKAN"
+                print(f"SETTINGS UPDATE: Mode Otomatis untuk '{device}' kini {mode_status}")
     except Exception as e:
         print(f"Error memproses pesan: {e}")
 
-# Inisialisasi Klien MQTT
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 client.on_connect = on_connect
@@ -126,83 +107,69 @@ try:
     while True:
         t_start = time.perf_counter()
         ret, frame = cam.read()
-        if not ret:
-            print("Peringatan: Gagal mengambil frame.")
-            break
+        if not ret: break
 
-        # --- [DIUBAH] Mode otomatis HANYA mengontrol lampu ---
-        if auto_mode_enabled:
+        # [DIUBAH] Jalankan deteksi jika SALAH SATU perangkat dalam mode auto
+        if any(device_auto_modes.values()):
             results = model_pose.predict(frame, verbose=False)
             annotated_frame = results[0].plot()
-            pose_found = len(results) > 0 and len(results[0].keypoints) > 0
+            pose_found = len(results) > 0 and results[0].keypoints is not None
 
             if pose_found:
                 consecutive_detections = min(consecutive_detections + 1, 10)
             else:
                 consecutive_detections = max(consecutive_detections - 1, 0)
             
-            # Logika hanya memeriksa dan mengubah 'lamp_state'
-            should_be_active = consecutive_detections >= 8 and lamp_state == 0
-            should_be_inactive = consecutive_detections <= 0 and lamp_state == 1
-
-            if should_be_active:
-                lamp_state = 1
-                lamp.on()
-            elif should_be_inactive:
-                lamp_state = 0
-                lamp.off()
+            should_be_active = consecutive_detections >= 8
+            should_be_inactive = consecutive_detections <= 0
             
-            # Mengirim laporan status deteksi ke backend
+            # Periksa dan kontrol setiap perangkat secara individual
+            if should_be_active:
+                if device_auto_modes["lamp"] and lamp_state == 0:
+                    lamp_state = 1; lamp.on()
+                if device_auto_modes["fan"] and fan_state == 0:
+                    fan_state = 1; fan.on()
+            elif should_be_inactive:
+                if device_auto_modes["lamp"] and lamp_state == 1:
+                    lamp_state = 0; lamp.off()
+                if device_auto_modes["fan"] and fan_state == 1:
+                    fan_state = 0; fan.off()
+            
             if should_be_active and not is_person_reported:
                 is_person_reported = True
-                payload = json.dumps({"motion_detected": True})
-                client.publish(SENSOR_TOPIC, payload)
-                print(f"PUBLISH (AUTO): Pose Terdeteksi, lampu menyala!")
+                client.publish(SENSOR_TOPIC, json.dumps({"motion_detected": True}))
+                print(f"PUBLISH (AUTO): Pose Terdeteksi!")
             elif should_be_inactive and is_person_reported:
                 is_person_reported = False
-                payload = json.dumps({"motion_cleared": True})
-                client.publish(SENSOR_TOPIC, payload)
-                print(f"PUBLISH (AUTO): Pose Tidak Terdeteksi, lampu mati!")
+                client.publish(SENSOR_TOPIC, json.dumps({"motion_cleared": True}))
+                print(f"PUBLISH (AUTO): Pose Tidak Terdeteksi!")
         else:
             annotated_frame = frame
 
-        lamp_status_text = f"Lamp: {'ON' if lamp_state == 1 else 'OFF'}"
-        lamp_color = (0, 255, 0) if lamp_state == 1 else (0, 0, 255)
-        cv2.putText(annotated_frame, lamp_status_text, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, .7, lamp_color, 2)
+        # [DIUBAH] Tampilkan status dan mode untuk setiap perangkat
+        lamp_mode = "AUTO" if device_auto_modes["lamp"] else "MANUAL"
+        lamp_status_text = f"Lamp: {'ON' if lamp_state == 1 else 'OFF'} ({lamp_mode})"
+        cv2.putText(annotated_frame, lamp_status_text, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 0) if lamp_state else (0, 0, 255), 2)
 
-        # Tampilkan status Kipas
-        fan_status_text = f"Fan: {'ON' if fan_state == 1 else 'OFF'}"
-        fan_color = (0, 255, 0) if fan_state == 1 else (0, 0, 255)
-        cv2.putText(annotated_frame, fan_status_text, (20, 90), cv2.FONT_HERSHEY_SIMPLEX, .7, fan_color, 2)
-
-        # Tampilkan status Mode
-        mode_text = f"MODE: {'AUTO' if auto_mode_enabled else 'MANUAL OVERRIDE'}"
-        mode_color = (0, 255, 255) if auto_mode_enabled else (255, 0, 255)
-        cv2.putText(annotated_frame, mode_text, (20, 120), cv2.FONT_HERSHEY_SIMPLEX, .7, mode_color, 2)
+        fan_mode = "AUTO" if device_auto_modes["fan"] else "MANUAL"
+        fan_status_text = f"Fan: {'ON' if fan_state == 1 else 'OFF'} ({fan_mode})"
+        cv2.putText(annotated_frame, fan_status_text, (20, 90), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 0) if fan_state else (0, 0, 255), 2)
         
-        # Kalkulasi dan tampilkan FPS
+        # ... (kode FPS dan imshow)
         t_stop = time.perf_counter()
         if (t_stop - t_start) > 0:
-            frame_rate_calc = 1 / (t_stop - t_start)
-            fps_buffer.append(frame_rate_calc)
-            if len(fps_buffer) > fps_avg_len:
-                fps_buffer.pop(0)
-            avg_frame_rate = np.mean(fps_buffer)
+            avg_frame_rate = np.mean(fps_buffer) if fps_buffer else 0
             cv2.putText(annotated_frame, f'FPS: {avg_frame_rate:.2f}', (20, 30), cv2.FONT_HERSHEY_SIMPLEX, .7, (255, 255, 0), 2)
-
         cv2.imshow("Smart Detection", annotated_frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        if cv2.waitKey(1) & 0xFF == ord('q'): break
+
 finally:
     print("\nMembersihkan sumber daya...")
     status_payload = json.dumps({"status": "offline"})
     client.publish(STATUS_TOPIC, status_payload)
-    print(f"PUBLISH: Mengirim status OFFLINE ke {STATUS_TOPIC}")
     time.sleep(0.5)
-
     cam.release()
     cv2.destroyAllWindows()
-  
     lamp.close()
     fan.close()
     client.loop_stop()
