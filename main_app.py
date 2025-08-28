@@ -175,18 +175,17 @@ try:
                 elif should_be_inactive and device["state"] == 1:
                     device["instance"].off()
                     device["state"] = 0
+
                 
                 # Kirim laporan MQTT hanya saat status berubah
                 if should_be_active and not device["is_person_reported"]:
                     device["is_person_reported"] = True
                     payload = json.dumps({"device": name, "motion_detected": True})
                     client.publish(SENSOR_TOPIC, payload)
-                    print(f"PUBLISH (AUTO '{name}'): Pose Terdeteksi!")
                 elif should_be_inactive and device["is_person_reported"]:
                     device["is_person_reported"] = False
                     payload = json.dumps({"device": name, "motion_cleared": True})
                     client.publish(SENSOR_TOPIC, payload)
-                    print(f"PUBLISH (AUTO '{name}'): Pose Tidak Terdeteksi!")
 
             # --- LOGIKA MODE TERJADWAL ---
             elif device["mode"] == "scheduled":
@@ -195,10 +194,10 @@ try:
                     off_time = datetime.strptime(device["schedule_off"], "%H:%M").time()
                     
                     is_active_time = False
-                    if on_time < off_time: # Jadwal di hari yang sama (e.g., 08:00 - 17:00)
+                    if on_time < off_time:
                         if on_time <= now < off_time:
                             is_active_time = True
-                    else: # Jadwal melewati tengah malam (e.g., 22:00 - 06:00)
+                    else:
                         if now >= on_time or now < off_time:
                             is_active_time = True
                     
@@ -209,14 +208,10 @@ try:
                         device["instance"].off()
                         device["state"] = 0
                 except (ValueError, TypeError):
-                    # Jadwal tidak valid atau belum diatur, biarkan perangkat mati
                     if device["state"] == 1:
                         device["instance"].off()
                         device["state"] = 0
-
-            # --- MODE MANUAL tidak melakukan apa-apa di loop ini ---
-
-        # --- Tampilkan Informasi di Layar ---
+            # --- Tampilkan Informasi di Layar ---
         y_pos = 30
         for name, device in devices.items():
             mode_text = f"{name.upper()} Mode: {device['mode'].upper()}"
