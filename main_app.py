@@ -34,7 +34,7 @@ except Exception as e:
     print(f"Error saat inisialisasi: {e}")
     exit()
 
-# [DIUBAH] Menggunakan dictionary untuk menyimpan mode setiap perangkat
+
 device_auto_modes = {
     "lamp": True,
     "fan": True
@@ -46,7 +46,7 @@ is_person_reported = False
 fps_buffer = []
 fps_avg_len = 50
 
-# [DIUBAH] Fungsi kontrol perangkat yang lebih granular
+
 def control_device(device, action):
     global lamp_state, fan_state, device_auto_modes
     
@@ -72,7 +72,6 @@ def on_connect(client, userdata, flags, rc, properties=None):
     else:
         print(f"Gagal terhubung ke MQTT, kode error: {rc}")
 
-# [DIUBAH] on_message sekarang menangani payload yang lebih spesifik
 def on_message(client, userdata, msg):
     global device_auto_modes
     print(f"PESAN DITERIMA di topik {msg.topic}")
@@ -102,14 +101,13 @@ client.will_set(STATUS_TOPIC, payload=last_will_payload, qos=1, retain=True)
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
 client.loop_start()
 
-print("\nSistem deteksi mulai berjalan. Tekan 'Q' untuk berhenti.")
+print("\nSistem deteksi mulai berjalan.")
 try:
     while True:
         t_start = time.perf_counter()
         ret, frame = cam.read()
         if not ret: break
 
-        # [DIUBAH] Jalankan deteksi jika SALAH SATU perangkat dalam mode auto
         if any(device_auto_modes.values()):
             results = model_pose.predict(frame, verbose=False)
             annotated_frame = results[0].plot()
@@ -146,7 +144,7 @@ try:
         else:
             annotated_frame = frame
 
-        # [DIUBAH] Tampilkan status dan mode untuk setiap perangkat
+       
         lamp_mode = "AUTO" if device_auto_modes["lamp"] else "MANUAL"
         lamp_status_text = f"Lamp: {'ON' if lamp_state == 1 else 'OFF'} ({lamp_mode})"
         cv2.putText(annotated_frame, lamp_status_text, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 0) if lamp_state else (0, 0, 255), 2)
@@ -155,7 +153,7 @@ try:
         fan_status_text = f"Fan: {'ON' if fan_state == 1 else 'OFF'} ({fan_mode})"
         cv2.putText(annotated_frame, fan_status_text, (20, 90), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 0) if fan_state else (0, 0, 255), 2)
         
-        # ... (kode FPS dan imshow)
+      
         t_stop = time.perf_counter()
         if (t_stop - t_start) > 0:
             avg_frame_rate = np.mean(fps_buffer) if fps_buffer else 0
