@@ -1,167 +1,177 @@
-# main_app.py
-# -----------------------------
-# Import semua library yang dibutuhkan
-# -----------------------------
-import paho.mqtt.client as mqtt
-import json
-import time
 import cv2
-import RPi.GPIO as GPIO
+import time
+import json
+import numpy as np
+import paho.mqtt.client as mqtt
+from gpiozero import LED
 from ultralytics import YOLO
 
-# ====================================================================
-# PENTING: UBAH KONFIGURASI DI BAWAH INI SESUAI DENGAN SETUP ANDA
-# ====================================================================
-
-# --- Konfigurasi MQTT ---
-MQTT_BROKER = "192.168.1.5"  # Ganti dengan IP Address komputer/server tempat MQTT Broker berjalan
+# --- KONFIGURASI ---
+MQTT_BROKER = "192.168.0.174"
 MQTT_PORT = 1883
-MQTT_USERNAME = "your_mqtt_username" # Sesuaikan dengan .env backend
-MQTT_PASSWORD = "your_mqtt_password" # Sesuaikan dengan .env backend
+MQTT_USERNAME = "cpsmagang"
+MQTT_PASSWORD = "cpsjaya123"
+DEVICE_IP_ADDRESS = "192.168.0.174"
 
-# --- Konfigurasi Perangkat ---
-# Ganti dengan IP Address unik dari Raspberry Pi ini
-DEVICE_IP_ADDRESS = "192.168.1.101" 
-# Topik MQTT akan dibuat secara otomatis berdasarkan IP ini
+# --- TOPIK MQTT ---
+STATUS_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/status"
 SENSOR_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/sensor"
-ACTION_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/action" 
+ACTION_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/action"
+SETTINGS_UPDATE_TOPIC = f"iot/{DEVICE_IP_ADDRESS}/settings/update"
 
-# --- Konfigurasi Model & Kamera ---
-MODEL_PATH = 'yolov8n.pt' # Model nano, yang paling ringan
-CONF_THRESHOLD = 0.45    # Tingkat kepercayaan minimum (45%) untuk mendeteksi orang
-CAMERA_INDEX = 0         # 0 untuk webcam USB atau Pi Camera
+try:
+    model_pose = YOLO("yolo12n-pose_ncnn_model", task="pose")
+    lamp = LED(26)
+    fan = LED(19)
+    cam_source = "usb0"
+    resW, resH = 640, 480
+    cam = cv2.VideoCapture(int(cam_source[3:]))
+    cam.set(3, resW)
+    cam.set(4, resH)
+    if not cam.isOpened(): raise Exception("Gagal membuka kamera.")
+    print("Kamera siap.")
+except Exception as e:
+    print(f"Error saat inisialisasi: {e}")
+    exit()
 
-# --- Konfigurasi Pin GPIO ---
-# Sesuaikan nomor pin ini dengan koneksi relay Anda
-LAMP_PIN = 23
-FAN_PIN = 24
+# [DIUBAH] Menggunakan dictionary untuk menyimpan mode setiap perangkat
+device_auto_modes = {
+    "lamp": True,
+    "fan": True
+}
+lamp_state = 0
+fan_state = 0
+consecutive_detections = 0
+is_person_reported = False
+fps_buffer = []
+fps_avg_len = 50
 
-# ====================================================================
-# KODE UTAMA (UMUMNYA TIDAK PERLU DIUBAH)
-# ====================================================================
-
-# --- Logika Kontrol Hardware ---
-def setup_gpio():
-    """Mengatur mode pin GPIO dan menginisialisasi relay."""
-    GPIO.setwarnings(False)
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(LAMP_PIN, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.setup(FAN_PIN, GPIO.OUT, initial=GPIO.LOW)
-    print("✅ GPIO dan Relay siap...")
-
+# [DIUBAH] Fungsi kontrol perangkat yang lebih granular
 def control_device(device, action):
-    """Mengontrol relay berdasarkan perintah dari MQTT."""
-    pin = None
+    global lamp_state, fan_state, device_auto_modes
+    
     if device == "lamp":
-        pin = LAMP_PIN
+        if action == "turn_on": lamp.on(); lamp_state = 1
+        else: lamp.off(); lamp_state = 0
+            
     elif device == "fan":
-        pin = FAN_PIN
-    else:
-        print(f"Peringatan: Tipe perangkat '{device}' tidak dikenali.")
-        return
-
-    state = GPIO.HIGH if action == "turn_on" else GPIO.LOW
-    GPIO.output(pin, state)
-    print(f"🚀 AKSI: Menjalankan '{action}' pada '{device}' (Pin {pin})")
-
-# --- Logika Deteksi Orang dengan YOLO ---
-def setup_camera_and_model():
-    """Mempersiapkan kamera dan memuat model YOLO."""
-    print("⏳ Mempersiapkan kamera dan memuat model YOLOv8...")
-    camera = cv2.VideoCapture(CAMERA_INDEX)
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        if action == "turn_on": fan.on(); fan_state = 1
+        else: fan.off(); fan_state = 0
     
-    if not camera.isOpened():
-        raise IOError("❌ Tidak bisa membuka kamera.")
-        
-    model = YOLO(MODEL_PATH)
-    print("✅ Kamera dan model siap.")
-    return camera, model
+    if device in device_auto_modes:
+        device_auto_modes[device] = False
+        print(f"AKSI MANUAL: Mode Otomatis untuk '{device}' kini DINONAKTIFKAN.")
 
-def detect_person(camera, model):
-    """Mengambil frame dan mendeteksi objek 'person'."""
-    ret, frame = camera.read()
-    if not ret:
-        print("Gagal mengambil frame.")
-        return False
-
-    results = model.predict(frame, verbose=False)
-    
-    for result in results:
-        for box in result.boxes:
-            if int(box.cls) == 0 and box.conf > CONF_THRESHOLD:
-                return True # Ditemukan orang
-    return False # Tidak ditemukan orang
-
-# --- Fungsi-fungsi MQTT ---
-def on_connect(client, userdata, flags, rc):
-    """Callback saat berhasil terhubung ke broker."""
+def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
-        print(f"✅ Terhubung ke MQTT Broker di {MQTT_BROKER}!")
+        print(f"Terhubung ke MQTT Broker di {MQTT_BROKER}!")
         client.subscribe(ACTION_TOPIC)
-        print(f"👂 SUBSCRIBE ke topik aksi: {ACTION_TOPIC}")
+        client.subscribe(SETTINGS_UPDATE_TOPIC)
+        status_payload = json.dumps({"status": "online"})
+        client.publish(STATUS_TOPIC, status_payload)
     else:
-        print(f"❌ Gagal terhubung ke MQTT, kode error: {rc}")
+        print(f"Gagal terhubung ke MQTT, kode error: {rc}")
 
+# [DIUBAH] on_message sekarang menangani payload yang lebih spesifik
 def on_message(client, userdata, msg):
-    """Callback saat menerima pesan dari topik yang di-subscribe."""
-    print(f"📩 PESAN DITERIMA di topik {msg.topic}")
+    global device_auto_modes
+    print(f"PESAN DITERIMA di topik {msg.topic}")
     try:
         payload = json.loads(msg.payload.decode())
-        device = payload.get("device")
-        action = payload.get("action")
-        
-        if device and action:
-            control_device(device, action)
-            
+        if msg.topic == ACTION_TOPIC:
+            device = payload.get("device")
+            action = payload.get("action")
+            if device and action:
+                control_device(device, action)
+        elif msg.topic == SETTINGS_UPDATE_TOPIC:
+            device = payload.get("device")
+            if device in device_auto_modes and "auto_mode_enabled" in payload:
+                new_mode = payload["auto_mode_enabled"]
+                device_auto_modes[device] = new_mode
+                mode_status = "DIAKTIFKAN" if new_mode else "DINONAKTIFKAN"
+                print(f"SETTINGS UPDATE: Mode Otomatis untuk '{device}' kini {mode_status}")
     except Exception as e:
         print(f"Error memproses pesan: {e}")
 
-# --- Program Utama ---
-if __name__ == "__main__":
-    # Inisialisasi MQTT Client
-    client = mqtt.Client()
-    client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-    client.on_connect = on_connect
-    client.on_message = on_message
-    
-    # Inisialisasi Hardware & Software
-    setup_gpio()
-    camera, model = setup_camera_and_model()
-    
-    try:
-        # Coba terhubung ke broker
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        client.loop_start() # Menjalankan loop MQTT di thread terpisah
-        
-        is_person_active = False
-        print("\n🚀 Sistem deteksi mulai berjalan. Tekan CTRL+C untuk berhenti.")
-        while True:
-            person_found = detect_person(camera, model)
-            
-            # Kirim pesan ke backend HANYA saat status deteksi berubah
-            if person_found and not is_person_active:
-                is_person_active = True
-                payload = json.dumps({"motion_detected": True})
-                client.publish(SENSOR_TOPIC, payload)
-                print(f"📡 PUBLISH ke {SENSOR_TOPIC}: Orang Terdeteksi!")
-            
-            elif not person_found and is_person_active:
-                is_person_active = False
-                payload = json.dumps({"motion_cleared": True})
-                client.publish(SENSOR_TOPIC, payload)
-                print(f"📡 PUBLISH ke {SENSOR_TOPIC}: Orang Tidak Terdeteksi!")
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
+client.on_connect = on_connect
+client.on_message = on_message
+last_will_payload = json.dumps({"status": "offline"})
+client.will_set(STATUS_TOPIC, payload=last_will_payload, qos=1, retain=True)
+client.connect(MQTT_BROKER, MQTT_PORT, 60)
+client.loop_start()
 
-    except KeyboardInterrupt:
-        print("\n🛑 Program dihentikan oleh pengguna.")
-    except Exception as e:
-        print(f"\n Terjadi error: {e}")
-    finally:
-        # Membersihkan semua sumber daya saat program berhenti
-        print("🧹 Membersihkan sumber daya...")
-        camera.release()
-        GPIO.cleanup()
-        client.loop_stop()
-        client.disconnect()
-        print("Selesai.")
+print("\nSistem deteksi mulai berjalan. Tekan 'Q' untuk berhenti.")
+try:
+    while True:
+        t_start = time.perf_counter()
+        ret, frame = cam.read()
+        if not ret: break
+
+        # [DIUBAH] Jalankan deteksi jika SALAH SATU perangkat dalam mode auto
+        if any(device_auto_modes.values()):
+            results = model_pose.predict(frame, verbose=False)
+            annotated_frame = results[0].plot()
+            pose_found = len(results) > 0 and results[0].keypoints is not None
+
+            if pose_found:
+                consecutive_detections = min(consecutive_detections + 1, 10)
+            else:
+                consecutive_detections = max(consecutive_detections - 1, 0)
+            
+            should_be_active = consecutive_detections >= 8
+            should_be_inactive = consecutive_detections <= 0
+            
+            # Periksa dan kontrol setiap perangkat secara individual
+            if should_be_active:
+                if device_auto_modes["lamp"] and lamp_state == 0:
+                    lamp_state = 1; lamp.on()
+                if device_auto_modes["fan"] and fan_state == 0:
+                    fan_state = 1; fan.on()
+            elif should_be_inactive:
+                if device_auto_modes["lamp"] and lamp_state == 1:
+                    lamp_state = 0; lamp.off()
+                if device_auto_modes["fan"] and fan_state == 1:
+                    fan_state = 0; fan.off()
+            
+            if should_be_active and not is_person_reported:
+                is_person_reported = True
+                client.publish(SENSOR_TOPIC, json.dumps({"motion_detected": True}))
+                print(f"PUBLISH (AUTO): Pose Terdeteksi!")
+            elif should_be_inactive and is_person_reported:
+                is_person_reported = False
+                client.publish(SENSOR_TOPIC, json.dumps({"motion_cleared": True}))
+                print(f"PUBLISH (AUTO): Pose Tidak Terdeteksi!")
+        else:
+            annotated_frame = frame
+
+        # [DIUBAH] Tampilkan status dan mode untuk setiap perangkat
+        lamp_mode = "AUTO" if device_auto_modes["lamp"] else "MANUAL"
+        lamp_status_text = f"Lamp: {'ON' if lamp_state == 1 else 'OFF'} ({lamp_mode})"
+        cv2.putText(annotated_frame, lamp_status_text, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 0) if lamp_state else (0, 0, 255), 2)
+
+        fan_mode = "AUTO" if device_auto_modes["fan"] else "MANUAL"
+        fan_status_text = f"Fan: {'ON' if fan_state == 1 else 'OFF'} ({fan_mode})"
+        cv2.putText(annotated_frame, fan_status_text, (20, 90), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 0) if fan_state else (0, 0, 255), 2)
+        
+        # ... (kode FPS dan imshow)
+        t_stop = time.perf_counter()
+        if (t_stop - t_start) > 0:
+            avg_frame_rate = np.mean(fps_buffer) if fps_buffer else 0
+            cv2.putText(annotated_frame, f'FPS: {avg_frame_rate:.2f}', (20, 30), cv2.FONT_HERSHEY_SIMPLEX, .7, (255, 255, 0), 2)
+        cv2.imshow("Smart Detection", annotated_frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'): break
+
+finally:
+    print("\nMembersihkan sumber daya...")
+    status_payload = json.dumps({"status": "offline"})
+    client.publish(STATUS_TOPIC, status_payload)
+    time.sleep(0.5)
+    cam.release()
+    cv2.destroyAllWindows()
+    lamp.close()
+    fan.close()
+    client.loop_stop()
+    client.disconnect()
+    print("Selesai.")
